@@ -34,34 +34,85 @@ async def currency_watch(asset, bot):
         asset.bid_p, asset.bid_q = float(data.get('bid')), float(data.get('bidSize'))
         asset.ask_p, asset.ask_q = float(data.get('ask')), float(data.get('askSize'))
         
-        
-async def buy(bot, asset, volume, client_id, reduce_only=False):
-    return await bot.buy(market=asset.symbol,
-                  price=asset.ask_p,
-                  size=volume,
-                  client_id=client_id,
-                  reduce_only=reduce_only,
-                  type='limit')
-    
-async def sell(bot, asset, volume, client_id, reduce_only=False):
-    
-    return await bot.sell(market=asset.symbol,
-                  price=asset.bid_p,
-                  size=volume,
-                  reduce_only=reduce_only,
-                  client_id=client_id,
-                  type='limit')
 
-@logger.catch
-async def create_orders(buy, sell):
-    result = await asyncio.gather(
-        asyncio.create_task(buy),
-        asyncio.create_task(sell),
-    )
-    return result
+async def buy(bot, asset, volume, client_id, post_only, reduce_only=False):
     
+    response = await bot.buy(market=asset.symbol,
+                  price=asset.ask_p + 0.111,
+                  size=volume,
+                  client_id=client_id,
+                  post_only=post_only,
+                  reduce_only=reduce_only,
+                  type='limit')
+    
+    if not response.get('success'):
+        await asyncio.sleep(30)
+        logger.error(response)
         
     
+    counter = 0    
+    while True:
+        if response.get('success'):
+            if not response.get('result').get('filledSize') == volume:
+                if response.get('result').get('remainingSize') == 0.0:
+                    await asyncio.sleep(0.001)
+                    counter += 1   
+                    response = await bot.buy(market=asset.symbol,
+                        price=asset.ask_p + 0.111,
+                        size=volume,
+                        client_id=client_id + counter,
+                        post_only=post_only,
+                        reduce_only=reduce_only,
+                        type='limit')
+                    
+                else:
+                    response = await bot.get_order_status_by_client_id(client_id + counter)
+                    logger.info(response)
+            else:
+                if response.get('result').get('status') == 'closed':
+                    return response
+        
+        await asyncio.sleep(0.05)
+        
+        
+@logger.catch
+async def sell(bot, asset, volume, client_id, post_only, reduce_only=False):
+    
+    response =  await bot.sell(market=asset.symbol,
+                  price=asset.bid_p + 0.1,
+                  size=volume,
+                  reduce_only=reduce_only,
+                  client_id=client_id,
+                  post_only=post_only,
+                  type='limit')
+    
+    if not response.get('success'):
+        await asyncio.sleep(30)
+        logger.error(response)
+    
+    counter = 0    
+    while True:
+        if response.get('success'):            
+            if not response.get('result').get('filledSize') == volume:
+                if response.get('result').get('remainingSize') == 0.0:
+                    await asyncio.sleep(0.02)
+                    counter += 1   
+                    response = await bot.sell(market=asset.symbol,
+                    price=asset.bid_p + 0.1,
+                    size=volume,
+                    reduce_only=reduce_only,
+                    client_id=client_id + counter,
+                    post_only=post_only,
+                    type='limit')
+                else:
+                    response = await bot.get_order_status_by_client_id(client_id + counter)
+            else:
+                if response.get('result').get('status') == 'closed':
+                    return response
+                    
+            await asyncio.sleep(0.05)
+        
+@logger.catch
 async def check_opportunities(asset_pair, bot):
     
     # Giving some time to download data from stream
@@ -75,83 +126,46 @@ async def check_opportunities(asset_pair, bot):
         
         print(basis)
         
-        if basis >= 0.14 and order.sent == False:
+        if basis >= 0.11 and order.sent == False:
+            logger.success(f'[ENTER] {basis}')
             order.sent = True
+                    
             
-            buy_price = asset_pair.first_leg.ask_p
-            sell_price = asset_pair.second_leg.bid_p
+            client_ids_ = [int(time.time() * 10000000), int(time.time() * 10000001)]
             
-            logger.success(f'Profitable entry! {asset_pair.first_leg.ask_p}, {asset_pair.second_leg.bid_p}')
+            logger.info(f'[ORDER]: buy {asset_pair.first_leg} sell {asset_pair.second_leg}')
+            bought = await buy(bot=bot, asset=asset_pair.first_leg, volume=asset_pair.volume, client_id=client_ids_[0], post_only=True, reduce_only=False)
+            sold = await sell(bot=bot, asset=asset_pair.second_leg, volume=asset_pair.volume, client_id=client_ids_[1], post_only=True, reduce_only=False)
             
-            client_ids = [int(random.random() * 10000), int(random.random() * 10000)]
-            result = await create_orders(
-                buy(bot, asset_pair.first_leg, asset_pair.volume, client_ids[0]),
-                sell(bot, asset_pair.second_leg, asset_pair.volume, client_ids[1])
-            )
+            logger.info(f'[ORDERS] Done')
+            
             
             with open('open.json', 'a+') as fobj:
-                json.dump(result, fobj, indent=4)
+                json.dump(bought, fobj, indent=4)
+                json.dump(sold, fobj, indent=4)
             
             
-            while True:
-                first_leg = await bot.get_order_status_by_client_id(client_ids[0])
-                second_leg = await bot.get_order_status_by_client_id(client_ids[1])
-            
-                await asyncio.sleep(3)
-                
-                   
-                if first_leg.get('result'):
-                    if first_leg.get('result').get('status') == 'closed':
-                        if second_leg.get('result'):
-                            if first_leg.get('result').get('status') == 'closed':
-                                logger.success(f'Result: {result}')
-                                break
 
-                await asyncio.sleep(3)
             
-            
-        elif basis <= 0.02 and order.sent == True:
+        elif basis <= 0.03 and order.sent == True:
             
             logger.success(f'Profitable exit! {asset_pair.second_leg.ask_p}, {asset_pair.first_leg.bid_p}')
             
-            client_ids = [int(random.random() * 10000), int(random.random() * 10000)]
+            client_ids = [int(time.time() * 10000000), int(time.time() * 10000001)]
 
-            
-            logger.info(client_ids[0])
-            logger.info(client_ids[1])
-            
-            result = await create_orders(
-                buy(bot, asset_pair.second_leg, asset_pair.volume, client_ids[0], reduce_only=True),
-                sell(bot, asset_pair.first_leg, asset_pair.volume * 0.9999, client_ids[1])
-            )
-            
-            
-            with open('close.json', 'a+') as fobj:
-                json.dump(result, fobj, indent=4)
-                
-            continue_ = False
-            while not continue_:
-                
-                await asyncio.sleep(3)
-                first_leg = await bot.get_order_status_by_client_id(client_ids[0])
-                second_leg = await bot.get_order_status_by_client_id(client_ids[1])
-                
-            
-                
-                if first_leg.get('result'):
-                    if first_leg.get('result').get('status') == 'closed':
-                        if second_leg.get('result'):
-                            if second_leg.get('result').get('status') == 'closed':
-                                order.sent = False
-                                logger.success(f'[CLOSED] {-buy_price + sell_price - asset_pair.second_leg.ask_p + asset_pair.first_leg.bid_p}')
-                                
-                                break
+            logger.info(f'[ORDER]: sell {asset_pair.first_leg} buy {asset_pair.second_leg}')
 
-                await asyncio.sleep(3)
+            bought = await buy(bot, asset_pair.second_leg, asset_pair.volume, client_ids[0], post_only=True, reduce_only=True)
+            await asyncio.sleep(0.01)
+            sold = await sell(bot, asset_pair.first_leg, asset_pair.volume, client_ids[1], post_only=True)
+            
+            order.sent = False
             
             
             
-
+            with open('open.json', 'a+') as fobj:
+                json.dump(bought, fobj, indent=4)
+                json.dump(sold, fobj, indent=4)
 
 
 async def main(asset_pair, first_leg, second_leg, bot):

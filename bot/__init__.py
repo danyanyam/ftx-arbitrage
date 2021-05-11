@@ -5,6 +5,7 @@ import hmac
 import aiohttp
 import json
 from bot.constants import ws, rest
+import asyncio
 
 
 
@@ -40,6 +41,7 @@ class Bot:
                   price,
                   size,
                   client_id,
+                  post_only,
                   reduce_only=False, # True, when we want to close previously sold positions
                   type='limit'):
         
@@ -51,8 +53,12 @@ class Bot:
                   "type": type,
                   "size": size,
                   "clientId": client_id,
+                  "postOnly": post_only,
                   "reduceOnly": reduce_only}
-        return await self._send_request(api, method, params)
+        
+        response = await self._send_request(api, method, params)
+        logger.error(response)
+        return response
     
     async def sell(self, 
                    market,
@@ -60,6 +66,7 @@ class Bot:
                    size,
                    client_id,
                    reduce_only, # True, when we want to close previously bought positions
+                   post_only,
                    type='limit'):
         
         api = '/api/orders'
@@ -70,8 +77,20 @@ class Bot:
                   "type": type,
                   "size": size,
                   "clientId": client_id,
+                  "postOnly": post_only,
                   "reduceOnly": reduce_only}
-        return await self._send_request(api, method, params)
+        
+        
+        res = await self._send_request(api, method, params)
+        
+        logger.error(res)
+        
+        await asyncio.sleep(2)
+        
+        res2 = await self.get_order_status_by_client_id(client_id)
+        logger.error(res2)
+        
+        return res
     
     async def cancel_order_by_client_id(self, client_id):
         api = f'/api/orders/by_client_id/{client_id}'
@@ -100,7 +119,7 @@ class AssetPair:
     first_leg: Asset
     second_leg: Asset
     
-    volume: float = 0.004
+    volume: float = 0.05
     fees: float = 0.0195 * 4
     
     def __getitem__(self, value):
