@@ -84,9 +84,6 @@ class Bot:
         res = await self._send_request(api, method, params)
         
         logger.error(res)
-        
-        await asyncio.sleep(2)
-        
         res2 = await self.get_order_status_by_client_id(client_id)
         logger.error(res2)
         
@@ -112,6 +109,8 @@ class Asset:
     bid_q: float = None
     ask_p: float = None
     ask_q: float = None
+    
+    increment: float = None
 
     
 @dataclass
@@ -119,14 +118,14 @@ class AssetPair:
     first_leg: Asset
     second_leg: Asset
     
-    volume: float = 0.05
+    volume: float = 0.01
     fees: float = 0.0195 * 4
     
     def __getitem__(self, value):
         return self.__dict__.get(value)
     
     async def get_basis(self):
-        return 100 * (self.second_leg.bid_p - self.first_leg.ask_p) / self.first_leg.ask_p
+        return 100 * (self.second_leg.bid_p - self.second_leg.increment - self.first_leg.ask_p + self.first_leg.increment) / (self.first_leg.ask_p + self.first_leg.increment)
 
     async def check_buy_opportunity(self):
         return await self.get_basis() if await self.get_basis() > self.fees else 0
