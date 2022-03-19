@@ -23,8 +23,8 @@ order = Order()
 logger.add(f"file_{datetime.datetime.now().date()}.log")
 
 
-UPPER_TARGET  = 0.11
-LOWER_TARGET  = 0.4
+UPPER_TARGET  = 0.04
+LOWER_TARGET  = -0.02
 
 
 async def currency_watch(asset, bot):
@@ -66,8 +66,9 @@ async def buy(bot, price, asset, volume, client_id, post_only, reduce_only=False
             if not response.get('result').get('filledSize') == volume:
                 if response.get('result').get('remainingSize') == 0.0:
                     counter += 1   
+                    price = asset.ask_p - increment if post_only else price
                     response = await bot.buy(market=asset.symbol,
-                        price=asset.ask_p - increment,
+                        price=price,
                         size=volume,
                         client_id=client_id + counter,
                         post_only=post_only,
@@ -105,9 +106,10 @@ async def sell(bot, price, asset, volume, client_id, post_only, reduce_only=Fals
             if not response.get('result').get('filledSize') == volume:
                 if response.get('result').get('remainingSize') == 0.0:
                     counter += 1   
+                    price = asset.bid_p + increment if post_only else price
                     response = await bot.sell(
                         market=asset.symbol,
-                        price=asset.bid_p + increment,
+                        price=price,
                         size=volume,
                         reduce_only=reduce_only,
                         client_id=client_id + counter,
@@ -137,8 +139,8 @@ async def check_opportunities(asset_pair, bot):
         
         if basis >= UPPER_TARGET and order.sent == False:
             
-            buy_price = first_leg.ask_p + first_leg.increment
-            sell_price = second_leg.bid_p - second_leg.increment
+            buy_price = first_leg.ask_p
+            sell_price = second_leg.bid_p
             
             logger.success(f'[ENTER] {basis}')
             order.sent = True
@@ -146,37 +148,45 @@ async def check_opportunities(asset_pair, bot):
             client_ids_ = [int(time.time() * 10000000), int(time.time() * 10000001)]
             
             logger.info(f'[ORDER]: buy {asset_pair.first_leg} ({buy_price}) sell {asset_pair.second_leg} ({sell_price})')
-            bought = await buy(bot=bot, price=buy_price, asset=asset_pair.first_leg, volume=asset_pair.volume, client_id=client_ids_[0], post_only=True, reduce_only=False)
-            increment = bought['result']['price'] - buy_price
-            sold = await sell(bot=bot, price=sell_price + increment, increment=increment, asset=asset_pair.second_leg, volume=asset_pair.volume, client_id=client_ids_[1], post_only=True, reduce_only=False)
+            
+            results = await create_orders(
+                buy(bot=bot, price=buy_price, increment=asset_pair.first_leg.increment, asset=asset_pair.first_leg, volume=asset_pair.volume, client_id=client_ids_[0], post_only=True, reduce_only=False),
+                sell(bot=bot, price=sell_price, increment=asset_pair.second_leg.increment, asset=asset_pair.second_leg, volume=asset_pair.volume, client_id=client_ids_[1], post_only=True, reduce_only=False)
+            )
+            
+            entry_price = results['result']['price']
+            # bought = await buy(bot=bot, price=buy_price, asset=asset_pair.first_leg, volume=asset_pair.volume, client_id=client_ids_[0], post_only=True, reduce_only=False)
+            # increment = bought['result']['price'] - buy_price
+            # sold = await sell(bot=bot, price=sell_price + increment, increment=increment, asset=asset_pair.second_leg, volume=asset_pair.volume, client_id=client_ids_[1], post_only=True, reduce_only=False)
             
             logger.info(f'[ORDERS] Done')
             
             with open('open.json', 'a+') as fobj:
-                json.dump(bought, fobj, indent=4)
-                json.dump(sold, fobj, indent=4)
+                json.dump(results[0], fobj, indent=4)
+                json.dump(results[1], fobj, indent=4)
             
         elif basis <= LOWER_TARGET and order.sent == True:
             
-            buyback_price = second_leg.ask_p + second_leg.increment
-            sellback_price = first_leg.bid_p - first_leg.increment
+            buyback_price = second_leg.ask_p
+            sellback_price = first_leg.bid_p
             
             logger.success(f'Profitable exit! {asset_pair.second_leg.ask_p} ({buyback_price}), {asset_pair.first_leg.bid_p} ({sellback_price})')
-            
-            # assert(((sellback_price - buyback_price) / buyback_price) < LOWER_TARGET)
-            
             client_ids = [int(time.time() * 10000000), int(time.time() * 10000001)]
             logger.info(f'[ORDER]: sell {asset_pair.first_leg} ({sellback_price}) buy {asset_pair.second_leg} ({buyback_price})')
-            bought = await buy(bot=bot, price=buyback_price, increment=0, asset=asset_pair.second_leg, volume=asset_pair.volume, client_id=client_ids[0], post_only=True, reduce_only=True)            
-            increment = bought['result']['price'] - buyback_price
-            sold = await sell(bot=bot, price=sellback_price, increment=increment, asset=asset_pair.first_leg, volume=asset_pair.volume, client_id=client_ids[1], post_only=True)            
+            
+            results = await create_orders(
+                buy(bot=bot, price=buyback_price, increment=0, asset=asset_pair.second_leg, volume=asset_pair.volume, client_id=client_ids[0], post_only=False, reduce_only=True),
+                sell(bot=bot, price=sellback_price, increment=0, asset=asset_pair.first_leg, volume=asset_pair.volume, client_id=client_ids[1], post_only=False)
+            )
+            
+            # bought = await buy(bot=bot, price=buyback_price, increment=0, asset=asset_pair.second_leg, volume=asset_pair.volume, client_id=client_ids[0], post_only=False, reduce_only=True)            
+            # increment = bought['result']['price'] - buyback_price
+            # sold = await sell(bot=bot, price=sellback_price, increment=increment, asset=asset_pair.first_leg, volume=asset_pair.volume, client_id=client_ids[1], post_only=False)            
             order.sent = False
             
-            
-            
             with open('open.json', 'a+') as fobj:
-                json.dump(bought, fobj, indent=4)
-                json.dump(sold, fobj, indent=4)
+                json.dump(results[0], fobj, indent=4)
+                json.dump(results[1], fobj, indent=4)
 
 
 async def main(asset_pair, first_leg, second_leg, bot):
